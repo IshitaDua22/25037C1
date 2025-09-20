@@ -1,0 +1,205 @@
+import streamlit as st
+import pandas as pd
+from datetime import date
+from Backend import (
+    get_user_by_email, add_new_user, create_goal, update_goal_status,
+    get_goals_for_employee, get_tasks_for_goal, add_task_to_goal,
+    approve_task, give_feedback, get_employee_goals_and_feedback,
+    get_employees_by_manager
+)
+
+# --- Session State Management ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = None
+if 'user_name' not in st.session_state:
+    st.session_state.user_name = None
+if 'user_role' not in st.session_state:
+    st.session_state.user_role = None
+
+def login_form():
+    """Handles user login and signup."""
+    st.sidebar.subheader("Login / Sign Up")
+    email = st.sidebar.text_input("Email")
+    
+    # Login
+    if st.sidebar.button("Login"):
+        user_data = get_user_by_email(email)
+        if user_data:
+            st.session_state.logged_in = True
+            st.session_state.user_id = user_data[0]
+            st.session_state.user_name = user_data[1]
+            st.session_state.user_role = user_data[3]
+            st.sidebar.success(f"Welcome back, {user_data[1]}!")
+            st.experimental_rerun()
+        else:
+            st.sidebar.error("User not found. Try signing up.")
+
+    # Sign Up
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("New User Sign Up")
+    name_signup = st.sidebar.text_input("Full Name")
+    email_signup = st.sidebar.text_input("Email", key="signup_email")
+    role_signup = st.sidebar.selectbox("Role", options=["Employee", "Manager"])
+    
+    if st.sidebar.button("Sign Up"):
+        if name_signup and email_signup:
+            user_id = add_new_user(name_signup, email_signup, role_signup)
+            if user_id:
+                st.session_state.logged_in = True
+                st.session_state.user_id = user_id
+                st.session_state.user_name = name_signup
+                st.session_state.user_role = role_signup
+                st.sidebar.success(f"Account created! Welcome, {name_signup}!")
+                st.experimental_rerun()
+            else:
+                st.sidebar.error("Failed to create account. Email might be in use.")
+
+def logout():
+    """Logs out the current user."""
+    st.session_state.logged_in = False
+    st.session_state.user_id = None
+    st.session_state.user_name = None
+    st.session_state.user_role = None
+    st.experimental_rerun()
+
+# --- Main App Logic ---
+st.set_page_config(
+    page_title="Performance Management System",
+    page_icon="🎯",
+    layout="wide"
+)
+
+st.title("Performance Management System 🎯")
+
+if not st.session_state.logged_in:
+    st.info("Please log in or sign up on the sidebar to continue.")
+    login_form()
+else:
+    st.sidebar.success(f"Logged in as {st.session_state.user_name} ({st.session_state.user_role})")
+    st.sidebar.button("Logout", on_click=logout)
+    
+    # --- Manager View ---
+    if st.session_state.user_role == 'Manager':
+        st.header("Manager Dashboard")
+        
+        # Goal Setting
+        with st.expander("Set a New Goal for an Employee", expanded=False):
+            st.subheader("Set a New Goal")
+            
+            employees = get_employees_by_manager(st.session_state.user_id)
+            employee_dict = {emp[1]: emp[0] for emp in employees}
+            
+            with st.form("goal_form"):
+                selected_employee_name = st.selectbox("Select Employee", options=list(employee_dict.keys()))
+                description = st.text_area("Goal Description")
+                due_date = st.date_input("Due Date", date.today())
+                
+                submit_goal = st.form_submit_button("Create Goal")
+                
+                if submit_goal:
+                    if selected_employee_name and description and due_date:
+                        employee_id = employee_dict[selected_employee_name]
+                        goal_id = create_goal(st.session_state.user_id, employee_id, description, due_date)
+                        if goal_id:
+                            st.success(f"Goal created successfully for {selected_employee_name}!")
+                        else:
+                            st.error("Failed to create goal.")
+                    else:
+                        st.warning("Please fill in all fields.")
+        
+        # Performance Tracking & Feedback
+        st.subheader("Track Employee Performance")
+        for emp_name, emp_id in get_employees_by_manager(st.session_state.user_id):
+            st.markdown(f"**{emp_name}'s Goals**")
+            goals = get_goals_for_employee(emp_id)
+            if goals:
+                for goal in goals:
+                    goal_id, desc, due_date, status, _ = goal
+                    with st.expander(f"Goal: {desc[:50]}...", expanded=False):
+                        st.write(f"**Due Date:** {due_date} | **Status:** `{status}`")
+                        
+                        # Task Approval
+                        st.subheader("Tasks")
+                        tasks = get_tasks_for_goal(goal_id)
+                        if tasks:
+                            for task in tasks:
+                                task_id, task_desc, is_approved = task
+                                st.write(f"- {'✅' if is_approved else '⏳'} {task_desc}")
+                                if not is_approved:
+                                    if st.button("Approve Task", key=f"approve_{task_id}"):
+                                        if approve_task(task_id):
+                                            st.success("Task approved! Goal status updated if necessary.")
+                                            st.experimental_rerun()
+                                        else:
+                                            st.error("Failed to approve task.")
+                        else:
+                            st.info("No tasks logged for this goal yet.")
+                        
+                        # Manager Feedback
+                        st.subheader("Give Feedback")
+                        feedback_text = st.text_area("Your feedback:", key=f"feedback_{goal_id}")
+                        if st.button("Submit Feedback", key=f"submit_feedback_{goal_id}"):
+                            if feedback_text:
+                                if give_feedback(goal_id, st.session_state.user_id, feedback_text):
+                                    st.success("Feedback submitted!")
+                                else:
+                                    st.error("Failed to submit feedback.")
+                            else:
+                                st.warning("Please enter feedback to submit.")
+            else:
+                st.info("No goals have been set for this employee yet.")
+
+    # --- Employee View ---
+    elif st.session_state.user_role == 'Employee':
+        st.header("My Performance Dashboard")
+        
+        # My Goals & Tasks
+        st.subheader("My Goals & Progress")
+        goals = get_goals_for_employee(st.session_state.user_id)
+        if goals:
+            for goal in goals:
+                goal_id, desc, due_date, status, manager_name = goal
+                with st.expander(f"Goal: {desc[:50]}...", expanded=True):
+                    st.write(f"**Assigned by:** {manager_name} | **Due Date:** {due_date} | **Status:** `{status}`")
+                    
+                    # Log Task
+                    st.subheader("My Tasks")
+                    tasks = get_tasks_for_goal(goal_id)
+                    if tasks:
+                        for task in tasks:
+                            task_id, task_desc, is_approved = task
+                            st.write(f"- {'✅' if is_approved else '⏳'} {task_desc}")
+                    
+                    new_task_desc = st.text_input("Add a new task:", key=f"new_task_{goal_id}")
+                    if st.button("Log Task", key=f"log_task_{goal_id}"):
+                        if new_task_desc:
+                            if add_task_to_goal(goal_id, st.session_state.user_id, new_task_desc):
+                                st.success("Task logged successfully! Awaiting manager approval.")
+                                st.experimental_rerun()
+                            else:
+                                st.error("Failed to log task.")
+                        else:
+                            st.warning("Please enter a task description.")
+                    
+                    # Manager Feedback
+                    st.subheader("Manager's Feedback")
+                    feedback_data = get_employee_goals_and_feedback(st.session_state.user_id)
+                    feedback_for_goal = [f[4] for f in feedback_data if f[0] == goal_id and f[4]]
+                    if feedback_for_goal:
+                        st.info(feedback_for_goal[0])
+                    else:
+                        st.info("No feedback yet.")
+
+        else:
+            st.info("No goals have been assigned to you yet.")
+            
+        # Reporting
+        st.header("My Performance History")
+        report_data = get_employee_goals_and_feedback(st.session_state.user_id)
+        if report_data:
+            df_report = pd.DataFrame(report_data, columns=["Goal ID", "Goal", "Due Date", "Status", "Feedback", "Created At"])
+            st.dataframe(df_report, use_container_width=True)
+        else:
+            st.info("No performance history to display.")
