@@ -1,0 +1,55 @@
+-- Table for User/Employee Accounts
+CREATE TABLE users (
+    user_id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    role VARCHAR(50) NOT NULL -- 'Manager' or 'Employee'
+);
+
+-- Table for Goals set by Managers
+CREATE TABLE goals (
+    goal_id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES users(user_id),
+    employee_id INTEGER REFERENCES users(user_id),
+    description TEXT NOT NULL,
+    due_date DATE NOT NULL,
+    status VARCHAR(50) DEFAULT 'Draft',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table for Tasks logged by Employees
+CREATE TABLE tasks (
+    task_id SERIAL PRIMARY KEY,
+    goal_id INTEGER REFERENCES goals(goal_id),
+    employee_id INTEGER REFERENCES users(user_id),
+    description TEXT NOT NULL,
+    is_approved BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table for Manager Feedback
+CREATE TABLE feedback (
+    feedback_id SERIAL PRIMARY KEY,
+    goal_id INTEGER REFERENCES goals(goal_id),
+    manager_id INTEGER REFERENCES users(user_id),
+    comments TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Trigger to automatically update goal status to 'In Progress' when a task is approved
+CREATE OR REPLACE FUNCTION update_goal_status_on_task_approval()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.is_approved = TRUE THEN
+        UPDATE goals
+        SET status = 'In Progress'
+        WHERE goal_id = NEW.goal_id AND status = 'Draft';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER task_approval_trigger
+AFTER UPDATE ON tasks
+FOR EACH ROW
+EXECUTE FUNCTION update_goal_status_on_task_approval();
